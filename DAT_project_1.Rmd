@@ -1,0 +1,365 @@
+---
+title: "Project 1"
+output:
+  pdf_document: default
+  html_document: default
+date: "2024-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Getting Started
+
+## Intro and concern
+
+Acquiring thorough profit insights is critical in the current competitive online shopping platform scenario. These insights are crucial for developing successful sales tactics and offers, which in turn lead to higher sales and more profits.
+
+We built a set of functions using linear regression techniques on top of Amazon sales data. With the use of these features, we can identify weekly profit trends depending on consumer actions. Our ability to accurately and precisely improve sales performance can be enhanced by utilizing this analytical method.
+
+**Question: Can we develop a profit function using the provided sales data that offers insights into profitability, considering various aspects such as purchase day, repeat purchases, and product categories?**\
+
+## Importing the Libraries
+
+```{r,message=FALSE}
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(readxl)
+library(nnet)
+library(modelr)
+library(tidyverse)
+library(glmnet)
+library(randomForest)
+library(knitr)
+library(caret)
+```
+
+## Importing Data
+
+Utilizing the 'readxl' library, we efficiently import Excel data, transforming it into a dataset labeled 'sales.data'. This dataset serves as a comprehensive repository of our sales information, ready for analysis and exploration.
+
+Revised column names for improved accessibility.
+
+```{r}
+sales.data <- read_excel("Amazon_2_Raw.xlsx")
+colnames(sales.data) <- c("order_id","order_date","ship_date","email","geography","category","product_name","sales","quantity","profit")
+```
+
+# Overview of Data
+
+Let's take a moment to examine the dataset and identify the most frequently accessed information, as well as areas with ample room for further analysis and exploration.
+
+## Summary of Sales Data
+
+There are a total of 10 fields within our dataset: Order ID, Order Date, Ship Date, Email ID, Geography, Category, Product Name, Sales, Quantity, and Profit. These fields offer rich insights into customer behavior and transactional patterns. However, a minor issue arises with some missing data in the Order Date and Ship Date fields, potentially impacting the accuracy of our analysis. To mitigate this, we'll focus on alternative feilds, more reliable information to delve deeper into customer behavior and its correlation with profitability.
+
+```{r}
+kable(summary(sales.data))
+```
+
+```{r}
+kable(head(sales.data))
+```
+
+## Data Preprocessing and Feautre Engineering
+
+```{r}
+sales.data$order_date <- as.Date(sales.data$order_date)
+sales.data$ship_date <- as.Date(sales.data$ship_date)
+sales.data$year <- format(sales.data$order_date, "%Y")
+sales.data$month <- format(sales.data$order_date, "%m")
+sales.data$day_of_week <- weekdays(sales.data$order_date)
+sales.data$shipping_duration <- as.numeric(difftime(sales.data$ship_date, sales.data$order_date, units = "days"))
+sales.data$year <- as.factor(sales.data$year)
+sales.data$month <- as.factor(sales.data$month)
+sales.data$day_of_week <- as.factor(sales.data$day_of_week)
+sales.data$category <- as.factor(sales.data$category)
+sales.data$sales_normalized <- scale(sales.data$sales)
+sales.data$quantity_normalized <- scale(sales.data$quantity)
+sales.data$shipping_duration_normalized <- scale(sales.data$shipping_duration)
+sales.data$order_day <- weekdays(as.Date(sales.data$order_date))
+sales.data$repeat_purchases <- ave(sales.data$order_id, sales.data$email, FUN = length)
+sales.data$repeat_purchases <- as.numeric(as.character(sales.data$repeat_purchases))
+sales.data$repeat_purchases_normalized <- scale(sales.data$repeat_purchases)
+sales.data$State <- sapply(strsplit(as.character(sales.data$geography), ","), function(x) x[3])
+
+```
+
+# Data Exploration
+
+## Sales Overview with respect to time(years)
+
+I want to analyze customer purchasing behavior over time, specifically identifying peak periods of purchases and lows throughout the year. I utilized a line graph plot for easy visualization of the peaks and troughs in customer purchasing patterns.
+
+```{r}
+purchase_frequency <- sales.data %>%
+  group_by(order_date) %>%
+  summarise(Orders = n())
+
+ggplot(purchase_frequency, aes(x = order_date, y = Orders)) +
+  geom_line() +
+  labs(x = "Order Date", y = "Number of Orders", title = "Customer Purchase Frequency Over Time")
+```
+
+## Data sorted with respect to category
+
+I sorted the data by category and proceeded to plot graphs depicting both sales and profit, providing insights into which categories are experiencing higher sales volume and which ones yield greater profit margins.
+
+```{r}
+category_sales_profit <- sales.data %>%
+  group_by(category) %>%
+  summarise(Total_Sales = sum(sales),
+            Total_Profit = sum(profit))
+
+
+category_sales_profit <- category_sales_profit[order(category_sales_profit$Total_Sales, decreasing = TRUE),]
+
+
+
+ggplot(category_sales_profit, aes(x = reorder(category, Total_Sales), y = Total_Sales)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(x = "Category", y = "Total Sales", title = "Total Sales by Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+ggplot(category_sales_profit, aes(x = reorder(category, Total_Profit), y = Total_Profit)) +
+  geom_bar(stat = "identity", fill = "lightgreen") +
+  labs(x = "Category", y = "Total Profit", title = "Total Profit by Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Time Series Analysis
+
+```{r}
+
+monthly_data <- sales.data %>%
+  mutate(Month = floor_date(order_date, "month")) %>%
+  group_by(Month) %>%
+  summarise(sales = sum(sales), profit = sum(profit))
+
+ggplot(monthly_data, aes(x = Month)) +
+  geom_line(aes(y = sales, colour = "Sales")) +
+  geom_line(aes(y = profit, colour = "Profit")) +
+  labs(title = "Monthly Sales and Profit", x = "Month", y = "Value") +
+  scale_colour_manual("", values = c("Sales" = "blue", "Profit" = "green"))
+```
+
+#### Sales have increased in the long run but have shown tumultuous behavior in the short term. On the other hand, profit has stayed somewhat steady with a spike in early 2014. Using this data we gain insight into how amazon has performed over time and we can use this data to make predictions about the future value of their company.
+
+## Geographical Analysis
+
+```{r}
+state_analysis <- sales.data %>%
+  group_by(State) %>%
+  summarise(sales = sum(sales), profit = sum(profit)) %>%
+  arrange(desc(sales))
+
+top_states <- head(state_analysis, 10)
+ggplot(top_states, aes(x = reorder(State, sales), y = sales, fill = State)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Top 10 States by Sales", x = "State", y = "Sales") +
+  coord_flip()
+```
+
+#### Upon completing the geographical analysis, we can see California orders the most products from amazon of any other state by a wide margin. Washington comes in second with the rest of the states ordering roughly the same amount of products. This data could be used by amazon to create more facilities in California where the demand for products is higher.
+
+## Product Performance Analysis
+
+```{r}
+category_performance <- sales.data %>%
+  group_by(category) %>%
+  summarise(sales = sum(sales), profit = sum(profit))
+
+p <- ggplot(category_performance, aes(x=category)) +
+  geom_bar(aes(y=sales), stat="identity", fill="skyblue") +
+  theme_minimal() +
+  labs(y="Sales", x="Category", title="Sales and Profit by Product Category") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p + geom_line(aes(y=profit, group=1), color="red") +
+  geom_point(aes(y=profit), color="darkred") +
+  scale_y_continuous(sec.axis = sec_axis(~., name="Profit"))
+```
+
+#### The plot above illustrates the sales and profit by product category, showcasing a dual-axis view where the bars represent sales and the line with markers indicates profit for each category. This visualization enables us to see not just the raw sales numbers but also how those sales translate into profit across different product categories. From the plot, we can observe the performance of each category in terms of sales and profit, which might help in making informed decisions on which product categories to focus on or potentially expand.
+
+# Machine Learning Models
+
+## Linear Regression
+
+```{r}
+# Feature Engineering
+sales.data$order_day <- weekdays(as.Date(sales.data$order_date))
+sales.data$repeat_purchases <- ave(sales.data$order_id, sales.data$email, FUN = length)
+
+# Model Training
+model <- lm(profit ~  category + repeat_purchases + quantity, data = sales.data)
+
+# Model Evaluation
+predicted_profit <- predict(model, newdata = sales.data)
+mae <- mean(abs(predicted_profit - sales.data$profit))
+mse <- mean((predicted_profit - sales.data$profit)^2)
+rsquared <- summary(model)$r.squared
+
+cat("Mean Absolute Error (MAE):", mae, "\n")
+cat("Mean Squared Error (MSE):", mse, "\n")
+cat("R-squared:", rsquared, "\n")
+
+# Interpretation
+kable(summary(model)$coefficients, caption = "Regression Coefficients")
+plot(model, which = 1)
+# Normal Q-Q Plot
+plot(model, which = 2)
+
+```
+
+-   The linear regression model uses `category`, `repeat_purchases`, and `quantity` as predictors to estimate `profit`.
+-   The Mean Absolute Error (MAE) is 47.39, indicating that the model's predictions are, on average, \$47.39 away from the actual profit values.
+-   The Mean Squared Error (MSE) is reported at 25325.26, suggesting that the model's predictions are quite variable and may be influenced by outliers or extreme values.
+-   The R-squared value of the model is 0.1643, which means that about 16.43% of the variation in `profit` is explained by the model. This is a relatively low value, implying that the model might not be capturing all the factors that influence profit.
+-   Diagnostic plots, such as Residuals vs Fitted and Q-Q plots, suggest the presence of non-linearity or outliers within the data that could be affecting model accuracy.
+
+## Neural Network with k fold
+
+```{r}
+
+data_for_nn <- model.matrix(~ category + order_day + repeat_purchases_normalized - 1, data = sales.data)
+target <- sales.data$profit
+set.seed(123) 
+k <- 5
+folds <- createFolds(target, k = k, list = TRUE, returnTrain = FALSE)
+
+# Initialize variables to store performance metrics
+maes <- numeric(k)
+mses <- numeric(k)
+
+# Loop through each fold
+for(i in 1:k) {
+  # Split the data into training and testing based on folds
+  test_indices <- folds[[i]]
+  train_indices <- setdiff(1:nrow(data_for_nn), test_indices)
+  
+  train_data <- data_for_nn[train_indices, ]
+  test_data <- data_for_nn[test_indices, ]
+  
+  train_target <- target[train_indices]
+  test_target <- target[test_indices]
+  
+  # Train the model
+  nn_model <- nnet(train_data, train_target, size = 5, decay = 0.000005, linout = TRUE, maxit = 3000)
+  # Make predictions
+  predictions <- predict(nn_model, test_data)
+  
+  # Calculate and store the performance metrics for this fold
+  maes[i] <- mean(abs(predictions - test_target))
+  mses[i] <- mean((predictions - test_target)^2)
+}
+
+# Calculate the average performance across all folds
+avg_mae <- mean(maes)
+avg_mse <- mean(mses)
+
+cat("Average Mean Absolute Error (MAE) across all folds:", avg_mae, "\n")
+cat("Average Mean Squared Error (MSE) across all folds:", avg_mse, "\n")
+
+```
+
+-   The neural network model uses `category`, `order_day`, and `repeat_purchases_normalized` from `sales.data` as inputs.
+-   The model's performance was validated using 5-fold cross-validation to assess consistency across different data subsets.
+-   **Average Mean Absolute Error (MAE):** The MAE across all folds is approximately \$50.22, indicating the average deviation of the neural network's predictions from the actual profit values.
+-   **Average Mean Squared Error (MSE):** The MSE is 31663.92, suggesting there is significant variance in the model's predictions, with higher errors for some predictions.
+-   The training process converged consistently across different folds and initial values, demonstrating the stability of the model.
+-   The model's reasonably accurate predictions, given the MAE and MSE, suggest a potential for improvement.
+
+## Regression using Elastic Net model
+
+```{r}
+# Data
+data_matrix <- model.matrix(~ year + month + day_of_week + category + sales_normalized + quantity_normalized + shipping_duration_normalized - 1+quantity, data = sales.data)
+profit_vector <- sales.data$profit
+
+# Elastic Net Regression
+set.seed(123) 
+cv_elasticnet <- cv.glmnet(data_matrix, profit_vector, alpha = 0.5)
+elasticnet_model <- glmnet(data_matrix, profit_vector, alpha = 0.5, lambda = cv_elasticnet$lambda.min)
+
+# Predictions
+predictions_elasticnet <- predict(elasticnet_model, s = cv_elasticnet$lambda.min, newx = data_matrix)
+
+# Calculate MAE and MSE
+mae_elasticnet <- mean(abs(predictions_elasticnet - profit_vector))
+mse_elasticnet <- mean((predictions_elasticnet - profit_vector)^2)
+cat("Elastic Net - Mean Absolute Error (MAE):", mae_elasticnet, "\n")
+cat("Elastic Net - Mean Squared Error (MSE):", mse_elasticnet, "\n")
+
+actuals <- profit_vector
+
+# Calculate R-squared
+ss_total <- sum((actuals - mean(actuals))^2)
+ss_res <- sum((actuals - predictions_elasticnet)^2)
+r_squared <- 1 - (ss_res / ss_total)
+cat("R-squared:", r_squared, "\n")
+
+# Actual VS Predicted Plot
+plot(actuals, predictions_elasticnet, main = "Actual vs. Predicted Profits",
+     xlab = "Actual Profits", ylab = "Predicted Profits", pch = 19, col = "blue")
+abline(0, 1, col = "red") # Diagonal line indicating perfect predictions
+
+# Residual Plot
+residuals <- actuals - predictions_elasticnet
+plot(actuals, residuals, main = "Residual Plot",
+     xlab = "Actual Profits", ylab = "Residuals", pch = 19, col = "darkgreen")
+abline(h = 0, col = "red") # Horizontal line at 0 indicating no error
+
+```
+
+-   The Elastic Net regression model, with an alpha of 0.5, demonstrates a balance between Lasso and Ridge regression characteristics. It was trained on an extensive set of predictors derived from `sales.data`.
+-   The model achieved a Mean Absolute Error (MAE) of 39.3798, indicating that the predictions are on average approximately \$39.38 away from the actual profit values.
+-   A Mean Squared Error (MSE) of 13956.61 was observed, which represents the average of the squares of the errors. The lower MSE, as compared to the neural network model, suggests improved prediction accuracy.
+-   The model accounts for approximately 53.945% of the variability in the profit data, as indicated by an R-squared value of 0.5394542. This represents a moderate to strong fit and a substantial improvement over the linear regression model.
+-   The "Actual vs. Predicted Profits" plot shows that while many predictions are close to the actual values (as indicated by the proximity to the red diagonal line), there is still some variance, especially with higher profit values. The "Residual Plot" further suggests that residuals are not randomly distributed around zero, implying the presence of outliers.
+
+## Random Forest
+
+```{r}
+set.seed(123) 
+rf_model <- randomForest(x = data_matrix, y = profit_vector, ntree = 500)
+
+#Predictions
+predictions_rf <- predict(rf_model, newdata = data_matrix)
+
+#Calculate MAE and MSE
+mae_rf <- mean(abs(predictions_rf - profit_vector))
+mse_rf <- mean((predictions_rf - profit_vector)^2)
+cat("Random Forest - Mean Absolute Error (MAE):", mae_rf, "\n")
+cat("Random Forest - Mean Squared Error (MSE):", mse_rf, "\n")
+
+actuals <- profit_vector
+
+#Calculate R-squared
+ss_total <- sum((actuals - mean(actuals))^2)
+ss_res <- sum((actuals - predictions_rf)^2)
+r_squared_rf <- 1 - (ss_res / ss_total)
+cat("R-squared:", r_squared_rf, "\n")
+
+#Actual VS Predicted Plot
+plot(actuals, predictions_rf, main = "Actual vs. Predicted Profits (Random Forest)",
+     xlab = "Actual Profits", ylab = "Predicted Profits", pch = 19, col = "blue")
+abline(0, 1, col = "red") # Diagonal line indicating perfect predictions
+
+#Residual Plot
+residuals_rf <- actuals - predictions_rf
+plot(actuals, residuals_rf, main = "Residual Plot (Random Forest)",
+     xlab = "Actual Profits", ylab = "Residuals", pch = 19, col = "darkgreen")
+abline(h = 0, col = "red")
+
+```
+
+-   The Random Forest model, utilizing 500 trees, shows strong predictive performance with an R-squared value of 0.854963. This indicates that the model explains approximately 85.5% of the variance in profit data, which is quite high and suggests a good fit.
+-   A Mean Absolute Error (MAE) of 13.73329 suggests that the model's predictions are, on average, about \$13.73 away from the actual profit values, demonstrating a high level of accuracy.
+-   The Mean Squared Error (MSE) of 4395.276 indicates that the model has a low average error squared, which confirms the accuracy seen in the MAE.
+-   The "Actual vs. Predicted Profits (Random Forest)" plot illustrates a tight clustering of points along the red line that indicates perfect predictions, demonstrating the model's accuracy in predicting profits.
+-   In the "Residual Plot (Random Forest)", most residuals are distributed close to the horizontal line at 0, with fewer large residuals compared to previous models, suggesting that the Random Forest model has a consistent prediction quality across the range of actual profits.
